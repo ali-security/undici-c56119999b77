@@ -1,7 +1,7 @@
 name: Benchmarks
+# SEAL: dispatch-only; benchmarks are not part of the sealed build.
 on:
-  - push
-  - pull_request
+  workflow_dispatch:
 
 permissions:
   contents: read
@@ -10,6 +10,7 @@ jobs:
   benchmark_current:
     name: benchmark current
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     steps:
       - name: Checkout Code
         uses: actions/checkout@8ade135a41bc03ea155e62e844d188df1ea18608 # v4.1.0
@@ -28,6 +29,7 @@ jobs:
   benchmark_branch:
     name: benchmark branch
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     steps:
       - name: Checkout Code
         uses: actions/checkout@8ade135a41bc03ea155e62e844d188df1ea18608 # v4.1.0

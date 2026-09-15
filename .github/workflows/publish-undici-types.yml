@@ -1,9 +1,8 @@
 name: Publish undici-types
 
+# SEAL: dispatch-only. The tag push trigger would try to publish undici-types from
+# the fork; publishing is not part of the sealed build.
 on:
-  push:
-    tags:
-      - 'v*'
   workflow_dispatch:
 
 permissions:
@@ -11,7 +10,9 @@ permissions:
 
 jobs:
   publish:
+    if: false
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@8ade135a41bc03ea155e62e844d188df1ea18608 # v4.1.0
       - uses: actions/setup-node@8f152de45cc393bb48ce5d89d36b731f54556e65 # v4.0.0

@@ -7,7 +7,9 @@
 #
 # Source repository: https://github.com/actions/dependency-review-action
 name: 'Dependency Review'
-on: [pull_request]
+# SEAL: dispatch-only; PR-scoped scanner, never part of the sealed build.
+on:
+  workflow_dispatch:
 
 permissions:
   contents: read
@@ -15,6 +17,7 @@ permissions:
 jobs:
   dependency-review:
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     steps:
       - name: Harden Runner
         uses: step-security/harden-runner@1b05615854632b887b69ae1be8cbefe72d3ae423 # v2.6.0

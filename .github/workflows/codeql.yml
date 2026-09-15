@@ -11,14 +11,9 @@
 #
 name: "CodeQL"
 
+# SEAL: dispatch-only; static analysis, never part of the sealed build.
 on:
-  push:
-    branches: ["main"]
-  pull_request:
-    # The branches below must be a subset of the branches above
-    branches: ["main"]
-  schedule:
-    - cron: "0 0 * * 1"
+  workflow_dispatch:
 
 permissions:
   contents: read
@@ -27,6 +22,7 @@ jobs:
   analyze:
     name: Analyze
     runs-on: ubuntu-latest
+    timeout-minutes: 60
     permissions:
       actions: read
       contents: read

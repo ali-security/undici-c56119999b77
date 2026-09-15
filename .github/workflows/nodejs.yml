@@ -4,38 +4,135 @@
 
 name: Node CI
 
+# SEAL: dispatch-only. Upstream's `push`/`pull_request` triggers would fire the
+# whole matrix on every fork sync; this workflow is dispatched explicitly instead.
 on:
-  push:
-    branches:
-     - current
-     - next
-     - 'v*'
-  pull_request:
+  workflow_dispatch:
+    inputs:
+      test-filter:
+        description: 'Optional space separated list of test files to run instead of the full suite'
+        required: false
+        default: ''
+        type: string
 
 jobs:
+  # SEAL: upstream calls the reusable workflow
+  # `pkgjs/action/.github/workflows/node-test.yaml@v0.1.7` here. A job that uses
+  # `uses:` cannot declare `timeout-minutes`, which this CI requires on every job,
+  # so the reusable workflow's `test` job is inlined verbatim below with the inputs
+  # upstream passed to it resolved in place:
+  #   * runs-on: ubuntu-latest, windows-latest
+  #   * test-command: npm run coverage:ci
+  #   * node-version: resolved by pkgjs/prepare-node-test-matrix-action from
+  #     `engines.node` (">=14.0") under the default `lts` upgrade policy against the
+  #     Node release schedule bundled in v0.1.7 => [20, 18, 16, 14]
+  #   * the `include` (ubuntu-latest / 16.8) and `exclude` (windows-latest x 14,
+  #     windows-latest x 16) entries upstream declared
+  # Two steps of the reusable workflow are intentionally not reproduced:
+  #   * `Print installed dependencies` (`npm ls --all`, with its failure explicitly
+  #     ignored) — a diagnostic only, and ignoring a step failure is rejected here
+  #     as test masking.
+  #   * the `post-test-steps` codecov upload — it needs `secrets.CODECOV_TOKEN`,
+  #     which the fork does not have.
   build:
     name: Test
-    uses: pkgjs/action/.github/workflows/node-test.yaml@v0.1.7
-    with:
-      runs-on: ubuntu-latest, windows-latest
-      test-command: npm run coverage:ci
-      timeout-minutes: 15
-      post-test-steps: |
-        - name: Coverage Report
-          uses: codecov/codecov-action@v3
-      include: |
-        - runs-on: ubuntu-latest
-          node-version: 16.8
-      exclude: |
-        - runs-on: windows-latest
-          node-version: 14
-        - runs-on: windows-latest
-          node-version: 16
+    runs-on: ${{ matrix.runs-on }}
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        node-version: [20, 18, 16, 14]
+        runs-on: [ubuntu-latest, windows-latest]
+        include:
+          - node-version: 16.8
+            runs-on: ubuntu-latest
+        exclude:
+          - runs-on: windows-latest
+            node-version: 14
+          - runs-on: windows-latest
+            node-version: 16
+    steps:
+      - name: Checkout
+        uses: actions/checkout@8ade135a41bc03ea155e62e844d188df1ea18608 # v4.1.0
+
+      - name: Setup Node.js@${{ matrix.node-version }}
+        uses: actions/setup-node@8f152de45cc393bb48ce5d89d36b731f54556e65 # v4.0.0
+        with:
+          node-version: ${{ matrix.node-version }}
+
+      - name: Print version information
+        run: |
+          echo OS: $(node -p "os.version()")
+          echo Node.js: $(node --version)
+          echo npm: $(npm --version)
+          echo git: $(git --version)
+
+      # SEAL: pin dependency resolution to the 5.29.0 release date so the Node 14 /
+      # 16 legs keep resolving the devDependencies that existed then instead of
+      # today's, which require Node >= 18.
+      - name: Configure npm registry time machine
+        run: |
+          npm config set registry https://time-machines-npm.sealsecurity.io/
+          npm config set //time-machines-npm.sealsecurity.io/:_authToken 2025-03-19T18:00:34.079Z
+
+      - name: Install dependencies
+        run: npm install
+        env:
+          MATRIX_NODE_VERSION: ${{ matrix.node-version }}
+
+      - name: Run tests
+        shell: bash
+        run: |
+          if [ -n "${{ inputs.test-filter }}" ]; then
+            node scripts/generate-pem && npx tap ${{ inputs.test-filter }}
+          else
+            npm run coverage:ci
+          fi
+        env:
+          MATRIX_NODE_VERSION: ${{ matrix.node-version }}
+
+  # SEAL: upstream has no workflow that builds the release artifact, so the pack and
+  # upload steps are added here. Node 22.14.0 / npm 10.9.2 is the runtime that packed
+  # the public undici-5.29.0.tgz.
+  pack:
+    name: Pack
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Checkout
+        uses: actions/checkout@8ade135a41bc03ea155e62e844d188df1ea18608 # v4.1.0
+
+      - name: Setup Node.js
+        uses: actions/setup-node@8f152de45cc393bb48ce5d89d36b731f54556e65 # v4.0.0
+        with:
+          node-version: 22.14.0
+
+      - name: Configure npm registry time machine
+        run: |
+          npm config set registry https://time-machines-npm.sealsecurity.io/
+          npm config set //time-machines-npm.sealsecurity.io/:_authToken 2025-03-19T18:00:34.079Z
+
+      # `npm pack --ignore-scripts` still fires the `prepare` lifecycle (`husky
+      # install`) and exits 127 with `sh: 1: husky: not found` unless the install
+      # ran first, so both commands live in one step.
+      - name: Build package tarball
+        run: |
+          npm install --ignore-scripts
+          npm pack --ignore-scripts
+
+      - name: Upload package tarball
+        uses: actions/upload-artifact@65462800fd760344b1a7b4382951275a0abb4808 # v4.3.3
+        with:
+          name: undici-5.29.0-tgz
+          path: undici-5.29.0.tgz
+          if-no-files-found: error
+
   automerge:
-    if: >
-      github.event_name == 'pull_request' && github.event.pull_request.user.login == 'dependabot[bot]'
+    # SEAL: dependabot-only job, disabled on the fork.
+    if: false
     needs: build
     runs-on: ubuntu-latest
+    timeout-minutes: 5
     permissions:
       pull-requests: write
       contents: write

@@ -188,6 +188,25 @@ test('Cookie Domain Validation', (t) => {
   t.end()
 })
 
+test('Cookie Unparsed Validation', (t) => {
+  const parts = [
+    'X-Custom=val; HttpOnly',
+    'Purpose=tracking; SameSite=None; Secure',
+    'HttpOnly; X-Custom=val',
+    'X-Custom=val\r\nSet-Cookie: evil=injected'
+  ]
+
+  for (const part of parts) {
+    t.throws(() => setCookie(new Headers(), {
+      name: 'Space',
+      value: 'Cat',
+      unparsed: [part]
+    }), Error, 'unparsed part must not inject attributes: ' + part)
+  }
+
+  t.end()
+})
+
 test('Cookie Delete', (t) => {
   let headers = new Headers()
   deleteCookie(headers, 'deno')

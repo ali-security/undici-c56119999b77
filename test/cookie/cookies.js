@@ -22,7 +22,7 @@
 
 'use strict'
 
-const { test } = require('tap')
+const { test, skip } = require('tap')
 const {
   deleteCookie,
   getCookies,
@@ -30,6 +30,12 @@ const {
   setCookie,
   Headers
 } = require('../..')
+const { nodeMajor } = require('../../lib/core/util')
+
+if (nodeMajor < 16) {
+  skip('cookies are not supported in node < v16')
+  process.exit()
+}
 
 // https://raw.githubusercontent.com/denoland/deno_std/b4239898d6c6b4cdbfd659a4ea1838cf4e656336/http/cookie_test.ts
 
@@ -611,6 +617,53 @@ test('Set-Cookie parser', (t) => {
 
   headers = new Headers()
   t.same(getSetCookies(headers), [])
+
+  t.end()
+})
+
+test('Set-Cookie parser does not percent-decode cookie values', (t) => {
+  t.same(
+    getSetCookies(new Headers({
+      'set-cookie': 'token=legit%0d%0aSet-Cookie:%20evil=injected%3B%20Path%3D/'
+    })),
+    [{
+      name: 'token',
+      value: 'legit%0d%0aSet-Cookie:%20evil=injected%3B%20Path%3D/'
+    }]
+  )
+
+  t.same(getSetCookies(new Headers({
+    'set-cookie': 'data=prefix%00suffix'
+  })), [{
+    name: 'data',
+    value: 'prefix%00suffix'
+  }])
+
+  t.end()
+})
+
+test('Set-Cookie parser only accepts exact SameSite values', (t) => {
+  t.same(getSetCookies(new Headers({
+    'set-cookie': 'a=b; SameSite=none'
+  })), [{
+    name: 'a',
+    value: 'b',
+    sameSite: 'None'
+  }])
+
+  t.same(getSetCookies(new Headers({
+    'set-cookie': 'a=b; SameSite=StrictLax'
+  })), [{
+    name: 'a',
+    value: 'b'
+  }])
+
+  t.same(getSetCookies(new Headers({
+    'set-cookie': 'a=b; SameSite=NoneOfYourBusiness'
+  })), [{
+    name: 'a',
+    value: 'b'
+  }])
 
   t.end()
 })

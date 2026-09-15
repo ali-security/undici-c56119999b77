@@ -4,20 +4,31 @@ const { test } = require('tap')
 const { Client, errors } = require('..')
 const net = require('net')
 
+function writeMalformedResponse (socket) {
+  socket.write('HTTP/1.1 200 OK\r\n')
+  socket.write('Content-Length: 1\r\n\r\n')
+  socket.write('11111\r\n')
+}
+
+function writeEmptyResponse (socket) {
+  socket.write('HTTP/1.1 200 OK\r\n')
+  socket.write('Content-Length: 0\r\n\r\n')
+}
+
 test('https://github.com/mcollina/undici/issues/810', (t) => {
   t.plan(3)
 
   let x = 0
   const server = net.createServer(socket => {
-    if (x++ === 0) {
-      socket.write('HTTP/1.1 200 OK\r\n')
-      socket.write('Content-Length: 1\r\n\r\n')
-      socket.write('11111\r\n')
-    } else {
-      socket.write('HTTP/1.1 200 OK\r\n')
-      socket.write('Content-Length: 0\r\n\r\n')
-      socket.write('\r\n')
-    }
+    // Wait for the request to be written. An unsolicited response, i.e. one
+    // sent before any request was made, is now rejected.
+    socket.once('data', () => {
+      if (x++ === 0) {
+        writeMalformedResponse(socket)
+      } else {
+        writeEmptyResponse(socket)
+      }
+    })
   })
   t.teardown(server.close.bind(server))
 
@@ -50,9 +61,7 @@ test('https://github.com/mcollina/undici/issues/810 no pipelining', (t) => {
   t.plan(2)
 
   const server = net.createServer(socket => {
-    socket.write('HTTP/1.1 200 OK\r\n')
-    socket.write('Content-Length: 1\r\n\r\n')
-    socket.write('11111\r\n')
+    socket.once('data', () => writeMalformedResponse(socket))
   })
   t.teardown(server.close.bind(server))
 
@@ -76,9 +85,7 @@ test('https://github.com/mcollina/undici/issues/810 pipelining', (t) => {
   t.plan(2)
 
   const server = net.createServer(socket => {
-    socket.write('HTTP/1.1 200 OK\r\n')
-    socket.write('Content-Length: 1\r\n\r\n')
-    socket.write('11111\r\n')
+    socket.once('data', () => writeMalformedResponse(socket))
   })
   t.teardown(server.close.bind(server))
 
@@ -103,9 +110,7 @@ test('https://github.com/mcollina/undici/issues/810 pipelining 2', (t) => {
   t.plan(4)
 
   const server = net.createServer(socket => {
-    socket.write('HTTP/1.1 200 OK\r\n')
-    socket.write('Content-Length: 1\r\n\r\n')
-    socket.write('11111\r\n')
+    socket.once('data', () => writeMalformedResponse(socket))
   })
   t.teardown(server.close.bind(server))
 

@@ -29,12 +29,12 @@ test('content-encoding header is case-iNsENsITIve', async (t) => {
 
     brotli.write(text)
     brotli.end()
-  }).listen(0)
+  }).listen(0, '127.0.0.1')
 
   t.teardown(server.close.bind(server))
   await once(server, 'listening')
 
-  const response = await fetch(`http://localhost:${server.address().port}`)
+  const response = await fetch(`http://127.0.0.1:${server.address().port}`, { keepalive: false })
 
   t.equal(await response.text(), text)
   t.equal(response.headers.get('content-encoding'), contentCodings)
@@ -55,12 +55,12 @@ test('response decompression according to content-encoding should be handled in 
 
     gzip.write(text)
     gzip.end()
-  }).listen(0)
+  }).listen(0, '127.0.0.1')
 
   t.teardown(server.close.bind(server))
   await once(server, 'listening')
 
-  const response = await fetch(`http://localhost:${server.address().port}`)
+  const response = await fetch(`http://127.0.0.1:${server.address().port}`, { keepalive: false })
 
   t.equal(await response.text(), text)
 })
@@ -78,7 +78,7 @@ function startEncodingServer (t, coding, count) {
     res.setHeader('Content-Type', 'text/plain')
 
     res.end('test')
-  }).listen(0)
+  }).listen(0, '127.0.0.1')
 
   t.teardown(server.close.bind(server))
 
@@ -89,7 +89,7 @@ async function fetchWithEncodings (t, coding, count) {
   const server = startEncodingServer(t, coding, count)
   await once(server, 'listening')
 
-  return fetch(`http://localhost:${server.address().port}`)
+  return fetch(`http://127.0.0.1:${server.address().port}`, { keepalive: false })
 }
 
 test(`should allow exactly ${MAX_CONTENT_ENCODINGS} content-encodings`, async (t) => {

@@ -820,7 +820,11 @@ test('parser error', (t) => {
 
   const server = net.createServer()
   server.once('connection', (socket) => {
-    socket.write('asd\n\r213123')
+    // Only respond once the request has actually been written. A server that
+    // answers before that is an unsolicited response and is now rejected.
+    socket.once('data', () => {
+      socket.end('asd\n\r213123')
+    })
   })
   t.teardown(server.close.bind(server))
 
@@ -829,7 +833,7 @@ test('parser error', (t) => {
     t.teardown(client.destroy.bind(client))
 
     client.request({ path: '/', method: 'GET' }, (err) => {
-      t.ok(err)
+      t.type(err, errors.HTTPParserError)
       client.close((err) => {
         t.error(err)
       })

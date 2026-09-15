@@ -2,21 +2,41 @@ const net = require('net')
 const { test } = require('tap')
 const { Client, errors } = require('..')
 
+// These servers write from timers that can still be pending once the client
+// has torn the connection down. Writing after the other party's FIN throws
+// EPIPE, which would surface as an uncaughtException rather than as the
+// assertion the test is actually about.
+function write (socket, data) {
+  if (socket.destroyed || socket.readableEnded || socket.writableEnded) {
+    return
+  }
+  socket.write(data)
+}
+
+function onConnection (fn) {
+  return (socket) => {
+    socket.on('error', () => {})
+    // Wait for the request to be written. A response sent before any request
+    // was made is unsolicited and is now rejected.
+    socket.once('data', () => fn(socket))
+  }
+}
+
 test('https://github.com/mcollina/undici/issues/268', (t) => {
   t.plan(2)
 
-  const server = net.createServer(socket => {
-    socket.write('HTTP/1.1 200 OK\r\n')
-    socket.write('Transfer-Encoding: chunked\r\n\r\n')
+  const server = net.createServer(onConnection(socket => {
+    write(socket, 'HTTP/1.1 200 OK\r\n')
+    write(socket, 'Transfer-Encoding: chunked\r\n\r\n')
     setTimeout(() => {
-      socket.write('1\r\n')
-      socket.write('\n\r\n')
+      write(socket, '1\r\n')
+      write(socket, '\n\r\n')
       setTimeout(() => {
-        socket.write('1\r\n')
-        socket.write('\n\r\n')
+        write(socket, '1\r\n')
+        write(socket, '\n\r\n')
       }, 500)
     }, 500)
-  })
+  }))
   t.teardown(server.close.bind(server))
 
   server.listen(0, () => {
@@ -42,9 +62,9 @@ test('https://github.com/mcollina/undici/issues/268', (t) => {
 test('parser fail', (t) => {
   t.plan(2)
 
-  const server = net.createServer(socket => {
-    socket.write('HTT/1.1 200 OK\r\n')
-  })
+  const server = net.createServer(onConnection(socket => {
+    write(socket, 'HTT/1.1 200 OK\r\n')
+  }))
   t.teardown(server.close.bind(server))
 
   server.listen(0, () => {
@@ -64,12 +84,12 @@ test('parser fail', (t) => {
 test('split header field', (t) => {
   t.plan(2)
 
-  const server = net.createServer(socket => {
-    socket.write('HTTP/1.1 200 OK\r\nA')
+  const server = net.createServer(onConnection(socket => {
+    write(socket, 'HTTP/1.1 200 OK\r\nA')
     setTimeout(() => {
-      socket.write('SD: asd,asd\r\n\r\n\r\n')
+      write(socket, 'SD: asd,asd\r\n\r\n\r\n')
     }, 100)
-  })
+  }))
   t.teardown(server.close.bind(server))
 
   server.listen(0, () => {
@@ -90,12 +110,12 @@ test('split header field', (t) => {
 test('split header value', (t) => {
   t.plan(2)
 
-  const server = net.createServer(socket => {
-    socket.write('HTTP/1.1 200 OK\r\nASD: asd')
+  const server = net.createServer(onConnection(socket => {
+    write(socket, 'HTTP/1.1 200 OK\r\nASD: asd')
     setTimeout(() => {
-      socket.write(',asd\r\n\r\n\r\n')
+      write(socket, ',asd\r\n\r\n\r\n')
     }, 100)
-  })
+  }))
   t.teardown(server.close.bind(server))
 
   server.listen(0, () => {

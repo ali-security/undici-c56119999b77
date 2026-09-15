@@ -372,7 +372,7 @@ tap.test('Should handle 206 partial content', t => {
       }, 1e2)
     } else if (x === 1) {
       t.same(req.headers.range, 'bytes=3-')
-      res.setHeader('content-range', 'bytes 3-6/6')
+      res.setHeader('content-range', 'bytes 3-5/6')
       res.setHeader('etag', 'asd')
       res.statusCode = 206
       res.end('def')
@@ -457,6 +457,149 @@ tap.test('Should handle 206 partial content', t => {
   })
 })
 
+tap.test('Should reject initial 206 partial content with mismatched content-length', t => {
+  let x = 0
+  const server = createServer((req, res) => {
+    if (x === 0) {
+      t.equal(req.headers.range, 'bytes=100-199')
+      res.statusCode = 206
+      // content-range announces 100 bytes (100-199) while content-length claims 300:
+      // the extra 200 bytes are smuggled past a client that trusts content-range
+      res.setHeader('content-range', 'bytes 100-199/300')
+      res.setHeader('content-length', '300')
+      res.end('1'.repeat(300))
+    } else {
+      t.fail('should not perform a second request')
+    }
+    x++
+  })
+
+  const dispatchOptions = {
+    method: 'GET',
+    path: '/',
+    headers: {
+      range: 'bytes=100-199'
+    }
+  }
+
+  t.plan(5)
+
+  server.listen(0, () => {
+    const client = new Client(`http://localhost:${server.address().port}`)
+    const handler = new RetryHandler(dispatchOptions, {
+      dispatch: (...args) => {
+        return client.dispatch(...args)
+      },
+      handler: {
+        onConnect () {
+          t.pass()
+        },
+        onHeaders (status, _rawHeaders, resume, _statusMessage) {
+          t.fail('should not forward the headers of a malformed 206')
+          return true
+        },
+        onData (chunk) {
+          t.fail('should not forward the body of a malformed 206')
+          return true
+        },
+        onComplete () {
+          t.fail('should not complete')
+        },
+        onError (err) {
+          t.equal(err.code, 'UND_ERR_REQ_RETRY')
+          t.equal(err.message, 'Content-Length mismatch')
+          t.equal(x, 1)
+        }
+      }
+    })
+
+    client.dispatch(dispatchOptions, handler)
+
+    t.teardown(async () => {
+      await client.close()
+
+      server.close()
+      await once(server, 'close')
+    })
+  })
+})
+
+tap.test('Should reject resumed 206 partial content with mismatched content-length', t => {
+  const chunks = []
+
+  let x = 0
+  const server = createServer((req, res) => {
+    if (x === 0) {
+      t.pass()
+      res.setHeader('etag', 'asd')
+      res.write('abc')
+      setTimeout(() => {
+        res.destroy()
+      }, 1e2)
+    } else if (x === 1) {
+      t.same(req.headers.range, 'bytes=3-')
+      // content-range announces 3 bytes (3-5) while content-length claims 6:
+      // the extra 3 bytes are smuggled past a client that trusts content-range
+      res.setHeader('content-range', 'bytes 3-5/6')
+      res.setHeader('content-length', '6')
+      res.setHeader('etag', 'asd')
+      res.statusCode = 206
+      res.end('defghi')
+    } else {
+      t.fail('should not perform a third request')
+    }
+    x++
+  })
+
+  const dispatchOptions = {
+    method: 'GET',
+    path: '/',
+    headers: {
+      'content-type': 'application/json'
+    }
+  }
+
+  t.plan(6)
+
+  server.listen(0, () => {
+    const client = new Client(`http://localhost:${server.address().port}`)
+    const handler = new RetryHandler(dispatchOptions, {
+      dispatch: (...args) => {
+        return client.dispatch(...args)
+      },
+      handler: {
+        onConnect () {
+          t.pass()
+        },
+        onHeaders (status, _rawHeaders, resume, _statusMessage) {
+          t.pass()
+          return true
+        },
+        onData (chunk) {
+          chunks.push(chunk)
+          return true
+        },
+        onComplete () {
+          t.fail('should not complete')
+        },
+        onError (err) {
+          t.equal(err.code, 'UND_ERR_REQ_RETRY')
+          t.equal(err.message, 'Content-Length mismatch')
+        }
+      }
+    })
+
+    client.dispatch(dispatchOptions, handler)
+
+    t.teardown(async () => {
+      await client.close()
+
+      server.close()
+      await once(server, 'close')
+    })
+  })
+})
+
 tap.test('Should handle 206 partial content - bad-etag', t => {
   const chunks = []
 
@@ -472,7 +615,7 @@ tap.test('Should handle 206 partial content - bad-etag', t => {
       }, 1e2)
     } else if (x === 1) {
       t.same(req.headers.range, 'bytes=3-')
-      res.setHeader('content-range', 'bytes 3-6/6')
+      res.setHeader('content-range', 'bytes 3-5/6')
       res.setHeader('etag', 'erwsd')
       res.statusCode = 206
       res.end('def')

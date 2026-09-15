@@ -129,3 +129,89 @@ test('fail if headers is not an object or an array', (t) => {
     })
   })
 })
+
+test('fail if duplicate content-length headers (different case)', (t) => {
+  t.plan(2)
+  const headers = ['Content-Length', '5', 'content-length', '0']
+
+  const server = createServer((req, res) => { res.end() })
+  t.teardown(server.close.bind(server))
+  server.listen(0, () => {
+    const client = new Client(`http://localhost:${server.address().port}`)
+    t.teardown(client.destroy.bind(client))
+
+    client.request({
+      path: '/',
+      method: 'POST',
+      headers,
+      body: 'hello'
+    }, (err) => {
+      t.ok(err instanceof errors.InvalidArgumentError)
+      t.equal(err.message, 'duplicate content-length header')
+    })
+  })
+})
+
+test('fail if duplicate content-length headers (same case)', (t) => {
+  t.plan(2)
+  const headers = ['content-length', '5', 'content-length', '0']
+
+  const server = createServer((req, res) => { res.end() })
+  t.teardown(server.close.bind(server))
+  server.listen(0, () => {
+    const client = new Client(`http://localhost:${server.address().port}`)
+    t.teardown(client.destroy.bind(client))
+
+    client.request({
+      path: '/',
+      method: 'POST',
+      headers,
+      body: 'hello'
+    }, (err) => {
+      t.ok(err instanceof errors.InvalidArgumentError)
+      t.equal(err.message, 'duplicate content-length header')
+    })
+  })
+})
+
+test('fail if duplicate host headers (different case)', (t) => {
+  t.plan(2)
+  const headers = ['Host', 'example.com', 'host', 'evil.com']
+
+  const server = createServer((req, res) => { res.end() })
+  t.teardown(server.close.bind(server))
+  server.listen(0, () => {
+    const client = new Client(`http://localhost:${server.address().port}`)
+    t.teardown(client.destroy.bind(client))
+
+    client.request({
+      path: '/',
+      method: 'GET',
+      headers
+    }, (err) => {
+      t.ok(err instanceof errors.InvalidArgumentError)
+      t.equal(err.message, 'duplicate host header')
+    })
+  })
+})
+
+test('fail if duplicate host headers (same case)', (t) => {
+  t.plan(2)
+  const headers = ['host', 'example.com', 'host', 'evil.com']
+
+  const server = createServer((req, res) => { res.end() })
+  t.teardown(server.close.bind(server))
+  server.listen(0, () => {
+    const client = new Client(`http://localhost:${server.address().port}`)
+    t.teardown(client.destroy.bind(client))
+
+    client.request({
+      path: '/',
+      method: 'GET',
+      headers
+    }, (err) => {
+      t.ok(err instanceof errors.InvalidArgumentError)
+      t.equal(err.message, 'duplicate host header')
+    })
+  })
+})

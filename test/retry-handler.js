@@ -687,6 +687,397 @@ tap.test('Should handle 206 partial content - bad-etag', t => {
   })
 })
 
+tap.test('#3900104 - Should not resume a 206 response without a usable content-range', t => {
+  const chunks = []
+
+  // The response is a partial one, but its content-range is unusable, so the
+  // handler forwards it downstream as-is without checkpointing a resume point.
+  // Retrying it would splice the bytes of a second response into a response
+  // whose headers were already handed to the caller.
+  let x = 0
+  const server = createServer((req, res) => {
+    t.equal(x, 0, 'must not retry an uncheckpointed partial response')
+    res.statusCode = 206
+    res.setHeader('content-length', '2')
+    res.setHeader('content-range', 'bytes 0-999')
+    res.write('1')
+    setTimeout(() => {
+      res.destroy()
+    }, 1e2)
+    x++
+  })
+
+  const dispatchOptions = {
+    method: 'GET',
+    path: '/',
+    headers: {
+      'content-type': 'application/json'
+    }
+  }
+
+  t.plan(5)
+
+  server.listen(0, () => {
+    const client = new Client(`http://localhost:${server.address().port}`)
+    const handler = new RetryHandler(dispatchOptions, {
+      dispatch: (...args) => {
+        return client.dispatch(...args)
+      },
+      handler: {
+        onConnect () {
+          t.pass()
+        },
+        onHeaders (status, _rawHeaders, resume, _statusMessage) {
+          t.equal(status, 206)
+          return true
+        },
+        onData (chunk) {
+          chunks.push(chunk)
+          return true
+        },
+        onComplete () {
+          t.fail('should not complete')
+        },
+        onError (err) {
+          t.ok(err, 'should forward the socket error downstream')
+          t.equal(x, 1, 'should not have re-dispatched the request')
+        }
+      }
+    })
+
+    client.dispatch(dispatchOptions, handler)
+
+    t.teardown(async () => {
+      await client.close()
+
+      server.close()
+      await once(server, 'close')
+    })
+  })
+})
+
+tap.test('#4970 - Should reject resumed partial content when body exceeds Content-Range', t => {
+  const chunks = []
+  const injectedResponse =
+    'HTTP/1.1 302 Found\r\nLocation: http://evil.com\r\nContent-Length: 0\r\n\r\n'
+
+  let x = 0
+  const server = createServer((req, res) => {
+    if (x === 0) {
+      t.pass()
+      res.setHeader('content-length', '5')
+      res.setHeader('etag', '123')
+      res.write('use')
+      setTimeout(() => {
+        res.destroy()
+      }, 1e2)
+    } else if (x === 1) {
+      t.equal(req.headers.range, 'bytes=3-5')
+      res.statusCode = 206
+      res.setHeader('etag', '123')
+      // content-range announces 3 bytes (3-5) while the body smuggles a whole
+      // extra response after them
+      res.setHeader('content-range', 'bytes 3-5/6')
+      res.end(`r1${injectedResponse}`)
+    } else {
+      t.fail('should not perform a third request')
+    }
+    x++
+  })
+
+  const dispatchOptions = {
+    retryOptions: {
+      retry: (err, { state, opts }, done) => {
+        if (err.message.includes('other side closed')) {
+          setTimeout(done, 1e2)
+          return
+        }
+
+        return done(err)
+      }
+    },
+    method: 'GET',
+    path: '/',
+    headers: {
+      'content-type': 'application/json'
+    }
+  }
+
+  t.plan(7)
+
+  server.listen(0, () => {
+    const client = new Client(`http://localhost:${server.address().port}`)
+    const handler = new RetryHandler(dispatchOptions, {
+      dispatch: (...args) => {
+        return client.dispatch(...args)
+      },
+      handler: {
+        onConnect () {
+          t.pass()
+        },
+        onHeaders (status, _rawHeaders, resume, _statusMessage) {
+          t.equal(status, 200)
+          return true
+        },
+        onData (chunk) {
+          chunks.push(chunk)
+          return true
+        },
+        onComplete () {
+          t.fail('should not complete')
+        },
+        onError (err) {
+          t.equal(err.code, 'UND_ERR_REQ_RETRY')
+          t.equal(err.message, 'Content-Length mismatch')
+          t.equal(Buffer.concat(chunks).toString('utf-8'), 'use')
+        }
+      }
+    })
+
+    client.dispatch(dispatchOptions, handler)
+
+    t.teardown(async () => {
+      await client.close()
+
+      server.close()
+      await once(server, 'close')
+    })
+  })
+})
+
+tap.test('Should reject resumed 206 partial content starting at the wrong offset', t => {
+  const chunks = []
+
+  let x = 0
+  const server = createServer((req, res) => {
+    if (x === 0) {
+      t.pass()
+      res.setHeader('content-length', '5')
+      res.setHeader('etag', 'asd')
+      res.write('abc')
+      setTimeout(() => {
+        res.destroy()
+      }, 1e2)
+    } else if (x === 1) {
+      t.equal(req.headers.range, 'bytes=3-5')
+      res.statusCode = 206
+      res.setHeader('etag', 'asd')
+      // the resumed range does not start where the first response left off:
+      // appending it would splice foreign bytes into the forwarded body
+      res.setHeader('content-range', 'bytes 4-6/7')
+      res.end('def')
+    } else {
+      t.fail('should not perform a third request')
+    }
+    x++
+  })
+
+  const dispatchOptions = {
+    retryOptions: {
+      retry: (err, { state, opts }, done) => {
+        if (err.message.includes('other side closed')) {
+          setTimeout(done, 1e2)
+          return
+        }
+
+        return done(err)
+      }
+    },
+    method: 'GET',
+    path: '/',
+    headers: {
+      'content-type': 'application/json'
+    }
+  }
+
+  t.plan(7)
+
+  server.listen(0, () => {
+    const client = new Client(`http://localhost:${server.address().port}`)
+    const handler = new RetryHandler(dispatchOptions, {
+      dispatch: (...args) => {
+        return client.dispatch(...args)
+      },
+      handler: {
+        onConnect () {
+          t.pass()
+        },
+        onHeaders (status, _rawHeaders, resume, _statusMessage) {
+          t.equal(status, 200)
+          return true
+        },
+        onData (chunk) {
+          chunks.push(chunk)
+          return true
+        },
+        onComplete () {
+          t.fail('should not complete')
+        },
+        onError (err) {
+          t.equal(err.code, 'UND_ERR_REQ_RETRY')
+          t.equal(err.message, 'Content-Range mismatch')
+          t.equal(Buffer.concat(chunks).toString('utf-8'), 'abc')
+        }
+      }
+    })
+
+    client.dispatch(dispatchOptions, handler)
+
+    t.teardown(async () => {
+      await client.close()
+
+      server.close()
+      await once(server, 'close')
+    })
+  })
+})
+
+tap.test('Should reject resumed 206 partial content ending past the checkpoint', t => {
+  const chunks = []
+
+  let x = 0
+  const server = createServer((req, res) => {
+    if (x === 0) {
+      t.pass()
+      res.setHeader('content-length', '5')
+      res.setHeader('etag', 'asd')
+      res.write('abc')
+      setTimeout(() => {
+        res.destroy()
+      }, 1e2)
+    } else if (x === 1) {
+      t.equal(req.headers.range, 'bytes=3-5')
+      res.statusCode = 206
+      res.setHeader('etag', 'asd')
+      // the resumed range claims to end well past the checkpointed end: the
+      // extra bytes would be appended to the already forwarded body
+      res.setHeader('content-range', 'bytes 3-9/10')
+      res.end('defghij')
+    } else {
+      t.fail('should not perform a third request')
+    }
+    x++
+  })
+
+  const dispatchOptions = {
+    retryOptions: {
+      retry: (err, { state, opts }, done) => {
+        if (err.message.includes('other side closed')) {
+          setTimeout(done, 1e2)
+          return
+        }
+
+        return done(err)
+      }
+    },
+    method: 'GET',
+    path: '/',
+    headers: {
+      'content-type': 'application/json'
+    }
+  }
+
+  t.plan(7)
+
+  server.listen(0, () => {
+    const client = new Client(`http://localhost:${server.address().port}`)
+    const handler = new RetryHandler(dispatchOptions, {
+      dispatch: (...args) => {
+        return client.dispatch(...args)
+      },
+      handler: {
+        onConnect () {
+          t.pass()
+        },
+        onHeaders (status, _rawHeaders, resume, _statusMessage) {
+          t.equal(status, 200)
+          return true
+        },
+        onData (chunk) {
+          chunks.push(chunk)
+          return true
+        },
+        onComplete () {
+          t.fail('should not complete')
+        },
+        onError (err) {
+          t.equal(err.code, 'UND_ERR_REQ_RETRY')
+          t.equal(err.message, 'Content-Range mismatch')
+          t.equal(Buffer.concat(chunks).toString('utf-8'), 'abc')
+        }
+      }
+    })
+
+    client.dispatch(dispatchOptions, handler)
+
+    t.teardown(async () => {
+      await client.close()
+
+      server.close()
+      await once(server, 'close')
+    })
+  })
+})
+
+tap.test('Should not reject a HEAD response with content-length', t => {
+  const chunks = []
+
+  let x = 0
+  const server = createServer((req, res) => {
+    t.equal(x, 0, 'should perform a single request')
+    res.setHeader('content-length', '1234')
+    res.end()
+    x++
+  })
+
+  const dispatchOptions = {
+    method: 'HEAD',
+    path: '/',
+    headers: {
+      'content-type': 'application/json'
+    }
+  }
+
+  t.plan(4)
+
+  server.listen(0, () => {
+    const client = new Client(`http://localhost:${server.address().port}`)
+    const handler = new RetryHandler(dispatchOptions, {
+      dispatch: (...args) => {
+        return client.dispatch(...args)
+      },
+      handler: {
+        onConnect () {
+          t.pass()
+        },
+        onHeaders (status, _rawHeaders, resume, _statusMessage) {
+          t.equal(status, 200)
+          return true
+        },
+        onData (chunk) {
+          chunks.push(chunk)
+          return true
+        },
+        onComplete () {
+          t.equal(Buffer.concat(chunks).toString('utf-8'), '')
+        },
+        onError (err) {
+          t.error(err)
+        }
+      }
+    })
+
+    client.dispatch(dispatchOptions, handler)
+
+    t.teardown(async () => {
+      await client.close()
+
+      server.close()
+      await once(server, 'close')
+    })
+  })
+})
+
 tap.test('retrying a request with a body', t => {
   let counter = 0
   const server = createServer()
